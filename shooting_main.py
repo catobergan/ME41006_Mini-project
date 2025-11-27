@@ -43,8 +43,8 @@ set_servo_angle(3, 90)
 cap = cv2.VideoCapture(0)
 
 # HSV-values used for camera target detection
-hsv_lower = np.array([0, 0, 245])
-hsv_upper = np.array([10, 10, 255])
+hsv_lower = np.array([40, 60, 180])
+hsv_upper = np.array([100, 140, 255])
 
 cap.set(3, 640)
 cap.set(4, 480)
@@ -162,4 +162,5 @@ while True:
 
 cap.release()
 cv2.destroyAllWindows()
+
 
