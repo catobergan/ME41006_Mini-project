@@ -34,12 +34,15 @@ def set_servo_angle(channel, angle):
     pwm.set_pwm(channel, 0, int(angle))
 
 # initialize the position of the motor
-set_servo_angle(1, 90)
-set_servo_angle(2, 90)
+currentAngle_x = 90
+currentAngle_y = 91 # Static y value is used, and thus needs to be tuned
+set_servo_angle(1, currentAngle_x)
+set_servo_angle(2, currentAngle_y)
 set_servo_angle(3, 90)
 
 cap = cv2.VideoCapture(0)
 
+# HSV-values used for camera target detection
 hsv_lower = np.array([0, 0, 245])
 hsv_upper = np.array([10, 10, 255])
 
@@ -48,31 +51,23 @@ cap.set(4, 480)
 
 print("Press 's' to save image")
 print("Press 'q' to exit program")
-# Initialize the target center of the object (e.g., [320, 240])
+# Initialize the target center of the image
 targetCenter = [320, 240]
-currentAngle_x = 90
-currentAngle_y = 91
 
 # Tunable target offset from center
 target_offset_x = 50  # Offset in x direction (pixels)
 target_offset_y = 0  # Offset in y direction (pixels)
 
-# PI Controller parameters: u[k] = u[k-1] + g0*e[k] + g1*e[k-1]
-pi_g0_x = 0.009   # Proportional gain (X)
-pi_g1_x = 0.003   # Integral gain (X) — tune to reduce steady-state error
-pi_g0_y = 0.005   # Proportional gain (Y)
-pi_g1_y = 0.002   # Integral gain (Y)
-
-# PI state: previous errors
-pi_prev_error_x = 0.0
-pi_prev_error_y = 0.0
+# P.controller gain
+p_kx = 0.028 # critical value (X)
+p_x = 0.5*p_kx # Proportional gain (X) from Ziegler-Nichols method
+p_y = 0.00 # Proportional gain (Y) zero due to constant y value
 
 # Shooting control
-# Shoot repeatedly while target is detected with a minimum interval between shots
 last_shot_time = 0.0
-shoot_interval = 0.3   # seconds between shots while target is detected
-motor_pulse = 0.1      # seconds to keep motor ON for each shot
-error_threshold = 20   # Threshold for shooting (pixels)
+shoot_interval = 0.3 # seconds between shots while target is detected
+motor_pulse = 0.1 # seconds to keep motor ON for each shot
+error_threshold = 10 # Threshold for shooting (pixels)
 
 while True:
     ret, frame = cap.read()
@@ -85,6 +80,7 @@ while True:
     mask = cv2.GaussianBlur(mask, (3, 3), 2)
     res = cv2.bitwise_and(frame, frame, mask=mask)
 
+	# center of image frame
     h, w = frame.shape[:2]
     cv2.line(res, (w // 2, 0), (w // 2, h), (255, 0, 0), 1)
     cv2.line(res, (0, h // 2), (w, h // 2), (255, 0, 0), 1)
@@ -95,7 +91,7 @@ while True:
 
     for c in contours:
         area = cv2.contourArea(c)
-        if area > 1000:
+        if area > 1700:
             print("area:", area)
             cv2.drawContours(res, [c], contourIdx=-1, color=(255, 255, 255), thickness=5, lineType=cv2.LINE_AA)
             M = cv2.moments(c)
@@ -110,20 +106,18 @@ while True:
             break
 
     # Compute new angles using PI control: u[k] = u[k-1] + g0*e[k] + g1*e[k-1]
-    if area > 1000:
+    if area > 1700:
         # Calculate error using tunable offset
-        error_x = targetCenter[0] - (w // 2 - target_offset_x)
-        error_y = (h // 2 - target_offset_y) - targetCenter[1]  # invert if servo direction differs
+        error_x = targetCenter[0] - (w // 2 - target_offset_x) # invert if servo direction differs
+        error_y = (h // 2 - target_offset_y) - targetCenter[1] # invert if servo direction differs
         
         # Calculate combined error magnitude
         error_magnitude = np.sqrt(error_x**2 + error_y**2)
-        
-        # Apply PI control formula for X axis: u[k] = u[k-1] + g0*e[k] + g1*e[k-1]
-        delta_angle_x = pi_g0_x * error_x + pi_g1_x * pi_prev_error_x
+
+		# P-controller
+        delta_angle_x = p_x * error_x
         new_angle_x = currentAngle_x + delta_angle_x
-        
-        # Apply PI control formula for Y axis (negate for correct direction)
-        delta_angle_y = -(pi_g0_y * error_y + pi_g1_y * pi_prev_error_y)
+        delta_angle_y = -(p_y * error_y)
         new_angle_y = currentAngle_y + delta_angle_y
         
         # Clip angles to valid servo range
@@ -133,20 +127,16 @@ while True:
         # Update servo positions
         set_servo_angle(1, new_angle_x)
         set_servo_angle(2, new_angle_y)
-        
-        print(f"Error magnitude: {error_magnitude:.2f} px, X error: {error_x:.2f}, Y error: {error_y:.2f}")
-        print(f"Angles -> X: {new_angle_x:.2f}, Y: {new_angle_y:.2f}")
+        print("Error: ", error_x)
         
         # Update state for next iteration
         currentAngle_x = new_angle_x
         currentAngle_y = new_angle_y
-        pi_prev_error_x = error_x
-        pi_prev_error_y = error_y
         
-        # Shoot when error is less than threshold (repeat every `shoot_interval` seconds)
+        # Shooting
         current_time = time.time()
         if error_magnitude < error_threshold:
-            # fire periodically while the error remains below threshold
+            # shoot periodically while error remains below threshold
             if current_time - last_shot_time >= shoot_interval:
                 print("SHOOTING! Target locked!")
                 motor_on()
@@ -154,7 +144,6 @@ while True:
                 motor_off()
                 last_shot_time = current_time
         else:
-            # reset timer when target lost so we can shoot immediately when reacquired
             last_shot_time = 0.0
 
     cv2.imshow("original", frame)
@@ -173,3 +162,4 @@ while True:
 
 cap.release()
 cv2.destroyAllWindows()
+
